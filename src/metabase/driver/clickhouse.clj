@@ -77,49 +77,6 @@
       :http_connection_provider "HTTP_URL_CONNECTION"}
      (sql-jdbc.common/handle-additional-options details :separator-style :url))))
 
-(defmethod sql-jdbc.execute/do-with-connection-with-options :clickhouse
-  [driver db-or-id-or-spec {:keys [^String session-timezone write?] :as options} f]
-  (sql-jdbc.execute/do-with-resolved-connection
-   driver
-   db-or-id-or-spec
-   options
-   (fn [^java.sql.Connection conn]
-     (when-not (sql-jdbc.execute/recursive-connection?)
-       (when session-timezone
-         (.setClientInfo conn com.clickhouse.jdbc.ClickHouseConnection/PROP_CUSTOM_HTTP_PARAMS
-                         (format "session_timezone=%s" session-timezone)))
-
-       (sql-jdbc.execute/set-best-transaction-level! driver conn)
-       (sql-jdbc.execute/set-time-zone-if-supported! driver conn session-timezone)
-       (when-let [db (cond
-                       ;; id?
-                       (integer? db-or-id-or-spec)
-                       (qp.store/with-metadata-provider db-or-id-or-spec
-                         (lib.metadata/database (qp.store/metadata-provider)))
-                       ;; db?
-                       (u/id db-or-id-or-spec)     db-or-id-or-spec
-                       ;; otherwise it's a spec and we can't get the db
-                       :else nil)]
-         (sql-jdbc.execute/set-role-if-supported! driver conn db))
-       (let [read-only? (not write?)]
-         (try
-           (log/trace (pr-str (list '.setReadOnly 'conn read-only?)))
-           (.setReadOnly conn read-only?)
-           (catch Throwable e
-             (log/debugf e "Error setting connection readOnly to %s" (pr-str read-only?)))))
-       (when-not write?
-         (try
-           (log/trace (pr-str '(.setAutoCommit conn true)))
-           (.setAutoCommit conn true)
-           (catch Throwable e
-             (log/debug e "Error enabling connection autoCommit"))))
-       (try
-         (log/trace (pr-str '(.setHoldability conn java.sql.ResultSet/CLOSE_CURSORS_AT_COMMIT)))
-         (.setHoldability conn java.sql.ResultSet/CLOSE_CURSORS_AT_COMMIT)
-         (catch Throwable e
-           (log/debug e "Error setting default holdability for connection"))))
-     (f conn))))
-
 (def ^:private ^{:arglists '([db-details])} cloud?
   "Returns true if the `db-details` are for a ClickHouse Cloud instance, and false otherwise. If it fails to connect
    to the database, it throws a java.sql.SQLException."
